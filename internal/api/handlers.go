@@ -294,6 +294,33 @@ func (h *Handler) UploadAudio(c *gin.Context) {
 		return
 	}
 
+	// Check if file is .webm and convert to MP3
+	// WebM files from browser MediaRecorder often lack proper duration metadata,
+	// causing playback issues. Converting to MP3 ensures proper metadata.
+	if strings.ToLower(filepath.Ext(filePath)) == ".webm" {
+		// Generate MP3 path
+		mp3Path := strings.TrimSuffix(filePath, filepath.Ext(filePath)) + ".mp3"
+
+		// Convert using FFmpeg with high quality settings and audio normalization
+		// -i: input file
+		// -vn: no video
+		// -af loudnorm: normalize audio levels (prevents muffled/quiet recordings)
+		// -acodec libmp3lame: MP3 encoder
+		// -b:a 320k: high quality constant bitrate (better than VBR for recordings)
+		cmd := exec.Command("ffmpeg", "-i", filePath, "-vn", "-af", "loudnorm", "-acodec", "libmp3lame", "-b:a", "320k", mp3Path)
+		if err := cmd.Run(); err != nil {
+			_ = h.fileService.RemoveFile(filePath)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to convert WebM audio to MP3"})
+			return
+		}
+
+		// Delete original .webm file
+		_ = h.fileService.RemoveFile(filePath)
+
+		// Update filePath to point to the MP3
+		filePath = mp3Path
+	}
+
 	// Create job record
 	jobID := filepath.Base(filePath)
 	jobID = jobID[:len(jobID)-len(filepath.Ext(jobID))] // Extract ID from filename
@@ -891,12 +918,6 @@ func (h *Handler) GetTranscript(c *gin.Context) {
 // @Produce json
 // @Param page query int false "Page number" default(1)
 // @Param limit query int false "Items per page" default(10)
-// @Summary List all transcription records
-// @Description Get a list of all transcription jobs with optional search and filtering
-// @Tags transcription
-// @Produce json
-// @Param page query int false "Page number" default(1)
-// @Param limit query int false "Items per page" default(10)
 // @Param sort_by query string false "Sort By"
 // @Param sort_order query string false "Sort Order (asc/desc)"
 // @Param status query string false "Filter by status"
@@ -1229,17 +1250,6 @@ func (h *Handler) UpdateTranscriptionTitle(c *gin.Context) {
 	})
 }
 
-// @Summary Delete transcription job
-// @Description Delete a transcription job and its associated files
-// @Tags transcription
-// @Produce json
-// @Param id path string true "Job ID"
-// @Success 200 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 400 {object} map[string]string
-// @Router /api/v1/transcription/{id} [delete]
-// @Security ApiKeyAuth
-// @Security BearerAuth
 // @Summary Delete transcription job
 // @Description Delete a transcription job and its associated files
 // @Tags transcription
@@ -1968,6 +1978,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 // @Summary Delete API key
 // @Description Delete an API key
 // @Tags api-keys
+// @Produce json
 // @Param id path int true "API Key ID"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
